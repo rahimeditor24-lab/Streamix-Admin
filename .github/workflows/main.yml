@@ -15,48 +15,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Setup JDK 17
       - name: Setup JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
-      # 3. Find and extract Android project
-      - name: Prepare Android Project
+      - name: Find Android Project
         shell: bash
         run: |
           set -e
 
-          echo "=== Repository files ==="
-          find . -maxdepth 3 -type f | head -200
+          echo "Checking repository..."
 
-          # Find first ZIP
-          ZIP_FILE=$(find . -type f -name "*.zip" | head -n 1 || true)
+          find . -maxdepth 4 -type f | head -300
 
-          if [ -n "$ZIP_FILE" ]; then
-            echo "ZIP found: $ZIP_FILE"
-
-            rm -rf project
-            mkdir -p project
-
-            unzip -q "$ZIP_FILE" -d project
-
-            echo "=== Extracted files ==="
-            find project -maxdepth 4 -type f | head -200
-          fi
-
-          # Find directory containing gradlew
           GRADLEW=$(find . -type f -name "gradlew" | head -n 1 || true)
 
           if [ -z "$GRADLEW" ]; then
-            echo "ERROR: gradlew not found."
-            echo "The ZIP/repository does not contain a Gradle wrapper."
+            echo "gradlew not found. Searching for build.gradle files..."
+
+            find . -type f \( \
+              -name "build.gradle" \
+              -o -name "build.gradle.kts" \
+              -o -name "settings.gradle" \
+              -o -name "settings.gradle.kts" \
+            \) -print
+
             exit 1
           fi
 
@@ -65,21 +53,17 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project:"
+          echo "Android project found:"
           echo "$PROJECT_DIR"
 
-          cd "$PROJECT_DIR"
-
-          chmod +x gradlew
-
-          echo "=== Gradle files ==="
-          ls -la
-
-      # 4. Setup Gradle
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 5. Create debug keystore
+      - name: Make Gradle Executable
+        run: |
+          cd "$PROJECT_DIR"
+          chmod +x gradlew
+
       - name: Create Debug Keystore
         shell: bash
         run: |
@@ -87,15 +71,11 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          KEYSTORE="$PROJECT_DIR/debug.keystore"
-
-          if [ ! -f "$KEYSTORE" ]; then
-            echo "Creating debug.keystore..."
-
+          if [ ! -f debug.keystore ]; then
             keytool \
               -genkeypair \
               -v \
-              -keystore "$KEYSTORE" \
+              -keystore debug.keystore \
               -storepass android \
               -alias androiddebugkey \
               -keypass android \
@@ -103,31 +83,15 @@ jobs:
               -keysize 2048 \
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
-          else
-            echo "debug.keystore already exists."
           fi
 
-          ls -lh "$KEYSTORE"
+          echo "Debug keystore ready."
 
-      # 6. Make Gradle executable
-      - name: Make Gradle Executable
-        run: |
-          cd "$PROJECT_DIR"
-          chmod +x gradlew
-
-      # 7. Show versions
-      - name: Check Gradle Environment
+      - name: Check Gradle
         run: |
           cd "$PROJECT_DIR"
           ./gradlew --version
 
-      # 8. Clean
-      - name: Clean Build
-        run: |
-          cd "$PROJECT_DIR"
-          ./gradlew clean --no-daemon
-
-      # 9. Build Debug APK
       - name: Build Debug APK
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8"
@@ -136,22 +100,14 @@ jobs:
 
           ./gradlew assembleDebug \
             --no-daemon \
-            --stacktrace \
-            --info
+            --stacktrace
 
-      # 10. Find APK
       - name: Find APK
         if: success()
-        shell: bash
         run: |
-          echo "=== APK FILES ==="
+          echo "APK files:"
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
-          find "$PROJECT_DIR" \
-            -type f \
-            -name "*.apk" \
-            -print
-
-      # 11. Upload APK
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
@@ -161,16 +117,9 @@ jobs:
             **/build/outputs/apk/**/*.apk
           if-no-files-found: error
 
-      # 12. Build Summary
       - name: Build Summary
         if: success()
-        shell: bash
         run: |
-          echo "======================================"
-          echo "       STREAMIX ADMIN APK READY"
-          echo "======================================"
-
-          find "$PROJECT_DIR" \
-            -type f \
-            -name "*.apk" \
-            -exec ls -lh {} \;
+          echo "================================"
+          echo "STREAMIX ADMIN APK BUILD SUCCESS"
+          echo "================================"
