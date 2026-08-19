@@ -17,24 +17,71 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
+      - name: Checkout Streamix Admin
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
+
+      - name: Find Android Gradle Project
+        id: find_project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_DIR=$(find . -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "./.git/*" \
+            -printf '%h\n' | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: settings.gradle or settings.gradle.kts was not found."
+            echo "Repository files:"
+            find . -maxdepth 4 -type f | sort | head -300
+            exit 1
+          fi
+
+          echo "Android project found at: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Make Gradle executable
-        run: chmod +x ./gradlew
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          fi
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
 
-      - name: Upload APK
+      - name: Find APK
+        id: apk
+        shell: bash
+        run: |
+          APK=$(find "${{ steps.find_project.outputs.project_dir }}" \
+            -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Debug APK was not generated."
+            exit 1
+          fi
+
+          echo "APK found: $APK"
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Streamix Admin APK
         uses: actions/upload-artifact@v4
         with:
           name: Streamix-Admin-Debug
-          path: '**/build/outputs/apk/debug/*.apk'
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: error
