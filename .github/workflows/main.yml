@@ -7,9 +7,12 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    name: Build Android App
+    name: Build Streamix Admin APK
     runs-on: ubuntu-latest
 
     steps:
@@ -28,16 +31,17 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found."
+            echo "ERROR: Streamix Admin ZIP not found."
             exit 1
           fi
 
-          echo "ZIP found: $ZIP_FILE"
+          echo "ZIP: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
       - name: Extract Project
         shell: bash
         run: |
+          rm -rf android-project
           mkdir -p android-project
           unzip -q "$ZIP_FILE" -d android-project
 
@@ -49,14 +53,14 @@ jobs:
             -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Gradle project not found."
+            echo "ERROR: settings.gradle/settings.gradle.kts not found."
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project found: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
-      - name: Install Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build Debug APK
@@ -64,20 +68,15 @@ jobs:
         run: |
           cd "$PROJECT_DIR"
 
-          GRADLE_VERSION=$(grep -Eo 'distributionUrl=.*gradle-[0-9.]+-[a-z]+\.zip' gradle/wrapper/gradle-wrapper.properties 2>/dev/null \
-            | grep -Eo 'gradle-[0-9.]+' \
-            | head -n 1 \
-            | sed 's/gradle-//' || true)
-
-          if [ -n "$GRADLE_VERSION" ]; then
-            echo "Using Gradle $GRADLE_VERSION"
-            gradle --version
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          else
+            echo "Gradle wrapper not found. Using installed Gradle."
+            gradle assembleDebug --no-daemon --stacktrace
           fi
 
-          gradle assembleDebug --stacktrace
-
       - name: Find APK
-        id: apk
         shell: bash
         run: |
           APK=$(find "$PROJECT_DIR" \
@@ -86,16 +85,18 @@ jobs:
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK not generated."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "APK found: $APK"
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          echo "APK generated:"
+          echo "$APK"
 
-      - name: Upload Streamix Admin APK
+          cp "$APK" "$GITHUB_WORKSPACE/Streamix-Admin.apk"
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Streamix-Admin-Debug
-          path: ${{ env.APK_PATH }}
+          name: Streamix-Admin
+          path: Streamix-Admin.apk
           if-no-files-found: error
