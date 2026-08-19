@@ -28,24 +28,20 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No Android project ZIP found."
+            echo "ERROR: ZIP file not found."
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP_FILE"
+          echo "ZIP found: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract Android Project
+      - name: Extract Project
         shell: bash
         run: |
           mkdir -p android-project
           unzip -q "$ZIP_FILE" -d android-project
 
-          echo "Extracted files:"
-          find android-project -maxdepth 4 -type f | sort | head -300
-
       - name: Find Gradle Project
-        id: project
         shell: bash
         run: |
           PROJECT_DIR=$(find android-project -type f \
@@ -53,31 +49,32 @@ jobs:
             -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: settings.gradle/settings.gradle.kts not found inside ZIP."
+            echo "ERROR: Gradle project not found."
             exit 1
           fi
 
-          echo "Gradle project: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found: $PROJECT_DIR"
 
-      - name: Make Gradle Executable
-        shell: bash
-        run: |
-          if [ -f "$PROJECT_DIR/gradlew" ]; then
-            chmod +x "$PROJECT_DIR/gradlew"
-          fi
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Build Debug APK
         shell: bash
         run: |
           cd "$PROJECT_DIR"
 
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --stacktrace
-          else
-            echo "ERROR: gradlew not found."
-            exit 1
+          GRADLE_VERSION=$(grep -Eo 'distributionUrl=.*gradle-[0-9.]+-[a-z]+\.zip' gradle/wrapper/gradle-wrapper.properties 2>/dev/null \
+            | grep -Eo 'gradle-[0-9.]+' \
+            | head -n 1 \
+            | sed 's/gradle-//' || true)
+
+          if [ -n "$GRADLE_VERSION" ]; then
+            echo "Using Gradle $GRADLE_VERSION"
+            gradle --version
           fi
+
+          gradle assembleDebug --stacktrace
 
       - name: Find APK
         id: apk
@@ -89,11 +86,11 @@ jobs:
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+            echo "ERROR: APK not generated."
             exit 1
           fi
 
-          echo "APK: $APK"
+          echo "APK found: $APK"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload Streamix Admin APK
