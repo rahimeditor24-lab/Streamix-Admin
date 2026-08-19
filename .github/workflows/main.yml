@@ -20,7 +20,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Find Android ZIP
         id: zip
@@ -110,6 +109,5 @@ jobs:
 
       - name: Build Summary
         run: |
-          echo "## ✅ Streamix Admin APK Build Complete" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "APK successfully built and uploaded." >> "$GITHUB_STEP_SUMMARY"
+          echo "## Streamix Admin APK Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "APK build completed." >> "$GITHUB_STEP_SUMMARY"
