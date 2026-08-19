@@ -58,6 +58,32 @@ jobs:
           echo "Android project: $DIR"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Repair Kotlin Compose Compatibility
+        shell: bash
+        run: |
+          PROJECT_DIR="${{ steps.project.outputs.dir }}"
+
+          echo "Checking Gradle files..."
+
+          find "$PROJECT_DIR" -type f \
+            \( -name "*.gradle" -o -name "*.gradle.kts" \) \
+            -print
+
+          # Align Kotlin Compose plugin with Kotlin 2.2.10
+          find "$PROJECT_DIR" -type f \
+            \( -name "*.gradle" -o -name "*.gradle.kts" \) \
+            -exec sed -i \
+            -E "s/(org\.jetbrains\.kotlin\.plugin\.compose['\"]?[[:space:]]*,?[[:space:]]*version[[:space:]]*=?[[:space:]]*['\"])[0-9.]+/\12.2.10/g" {} \;
+
+          # Remove old explicit Compose compiler extension configuration.
+          # Modern Kotlin Compose plugin manages the compiler.
+          find "$PROJECT_DIR" -type f \
+            \( -name "*.gradle" -o -name "*.gradle.kts" \) \
+            -exec sed -i \
+            -E '/kotlinCompilerExtensionVersion[[:space:]]*=/d' {} \;
+
+          echo "Compose/Kotlin compatibility repair completed."
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -79,6 +105,8 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
 
             echo "Debug keystore created."
+          else
+            echo "Debug keystore already exists."
           fi
 
       - name: Make Gradle Executable
@@ -96,10 +124,12 @@ jobs:
           PROJECT_DIR="${{ steps.project.outputs.dir }}"
           cd "$PROJECT_DIR"
 
+          echo "Building Streamix Admin APK..."
+
           if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleDebug --no-daemon --stacktrace
           else
-            gradle assembleDebug --no-daemon
+            gradle assembleDebug --no-daemon --stacktrace
           fi
 
       - name: Find APK
