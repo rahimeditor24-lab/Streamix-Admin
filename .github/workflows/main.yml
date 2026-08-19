@@ -6,9 +6,6 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
-
 jobs:
   build:
     name: Build Streamix Admin APK
@@ -23,129 +20,96 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
+
+      - name: Find Android ZIP
+        id: zip
+        shell: bash
+        run: |
+          ZIP=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: Android ZIP not found"
+            exit 1
+          fi
+
+          echo "Found ZIP: $ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
       - name: Extract Android ZIP
         shell: bash
         run: |
-          set -e
+          rm -rf android-project
+          mkdir -p android-project
 
-          mkdir -p extracted
-
-          ZIP=$(find . -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: No ZIP file found!"
-            exit 1
-          fi
-
-          echo "Found ZIP:"
-          echo "$ZIP"
-
-          unzip -q "$ZIP" -d extracted
+          unzip -q "${{ steps.zip.outputs.zip }}" -d android-project
 
           echo "=== Extracted files ==="
-          find extracted -maxdepth 5 -type f | head -300
+          find android-project -maxdepth 3 -type f | sort
 
       - name: Find Gradle Project
+        id: project
         shell: bash
         run: |
-          set -e
+          PROJECT=$(find android-project -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -printf '%h\n' | head -n 1)
 
-          GRADLEW=$(find extracted \
-            -type f \
-            -name "gradlew" \
-            -print -quit)
-
-          if [ -z "$GRADLEW" ]; then
-            echo "ERROR: gradlew not found inside ZIP."
-
-            echo "Searching Gradle files..."
-            find extracted -type f \( \
-              -name "build.gradle" \
-              -o -name "build.gradle.kts" \
-              -o -name "settings.gradle" \
-              -o -name "settings.gradle.kts" \
-            \) -print
-
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: settings.gradle(.kts) not found"
+            find android-project -maxdepth 4 -type f
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$GRADLEW")
-          PROJECT_DIR=$(cd "$PROJECT_DIR" && pwd)
+          echo "Gradle project found: $PROJECT"
+          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "================================"
-          echo "Android project found:"
-          echo "$PROJECT_DIR"
-          echo "================================"
-
-      - name: Setup Gradle
+      - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
 
-      - name: Make Gradle Executable
+      - name: Check Gradle Environment
+        working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          cd "$PROJECT_DIR"
-          chmod +x gradlew
+          gradle --version
+          java -version
 
-      - name: Create Debug Keystore
-        shell: bash
+      - name: Clean Build
+        working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          cd "$PROJECT_DIR"
-
-          if [ ! -f debug.keystore ]; then
-            echo "Creating debug keystore..."
-
-            keytool \
-              -genkeypair \
-              -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-
-      - name: Check Gradle
-        run: |
-          cd "$PROJECT_DIR"
-          ./gradlew --version
+          gradle clean --no-daemon
 
       - name: Build Debug APK
-        env:
-          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8"
+        working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          cd "$PROJECT_DIR"
-
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace
+          gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Find APK
-        if: success()
+        id: apk
+        shell: bash
         run: |
-          echo "=== APK FOUND ==="
+          APK=$(find "${{ steps.project.outputs.dir }}/app/build/outputs/apk" \
+            -type f -name "*.apk" | head -n 1)
 
-          find "$PROJECT_DIR" \
-            -type f \
-            -name "*.apk" \
-            -print
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found"
+            find "${{ steps.project.outputs.dir }}/app/build" -type f || true
+            exit 1
+          fi
+
+          echo "APK found: $APK"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Streamix-Admin-APK
-          path: |
-            **/build/outputs/apk/**/*.apk
+          name: Streamix-Admin-Debug
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
 
       - name: Build Summary
-        if: success()
         run: |
-          echo "======================================"
-          echo " STREAMIX ADMIN APK BUILD SUCCESSFUL "
-          echo "======================================"
+          echo "## ✅ Streamix Admin APK Build Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "APK successfully built and uploaded." >> "$GITHUB_STEP_SUMMARY"
