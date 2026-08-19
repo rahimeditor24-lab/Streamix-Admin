@@ -24,21 +24,43 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Find Android Project
+      - name: Extract Android ZIP
         shell: bash
         run: |
           set -e
 
-          echo "Checking repository..."
+          mkdir -p extracted
 
-          find . -maxdepth 4 -type f | head -300
+          ZIP=$(find . -type f -name "*.zip" | head -n 1)
 
-          GRADLEW=$(find . -type f -name "gradlew" | head -n 1 || true)
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No ZIP file found!"
+            exit 1
+          fi
+
+          echo "Found ZIP:"
+          echo "$ZIP"
+
+          unzip -q "$ZIP" -d extracted
+
+          echo "=== Extracted files ==="
+          find extracted -maxdepth 5 -type f | head -300
+
+      - name: Find Gradle Project
+        shell: bash
+        run: |
+          set -e
+
+          GRADLEW=$(find extracted \
+            -type f \
+            -name "gradlew" \
+            -print -quit)
 
           if [ -z "$GRADLEW" ]; then
-            echo "gradlew not found. Searching for build.gradle files..."
+            echo "ERROR: gradlew not found inside ZIP."
 
-            find . -type f \( \
+            echo "Searching Gradle files..."
+            find extracted -type f \( \
               -name "build.gradle" \
               -o -name "build.gradle.kts" \
               -o -name "settings.gradle" \
@@ -53,8 +75,10 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
+          echo "================================"
           echo "Android project found:"
           echo "$PROJECT_DIR"
+          echo "================================"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -67,11 +91,11 @@ jobs:
       - name: Create Debug Keystore
         shell: bash
         run: |
-          set -e
-
           cd "$PROJECT_DIR"
 
           if [ ! -f debug.keystore ]; then
+            echo "Creating debug keystore..."
+
             keytool \
               -genkeypair \
               -v \
@@ -84,8 +108,6 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
-
-          echo "Debug keystore ready."
 
       - name: Check Gradle
         run: |
@@ -105,8 +127,12 @@ jobs:
       - name: Find APK
         if: success()
         run: |
-          echo "APK files:"
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+          echo "=== APK FOUND ==="
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" \
+            -print
 
       - name: Upload APK
         if: success()
@@ -120,6 +146,6 @@ jobs:
       - name: Build Summary
         if: success()
         run: |
-          echo "================================"
-          echo "STREAMIX ADMIN APK BUILD SUCCESS"
-          echo "================================"
+          echo "======================================"
+          echo " STREAMIX ADMIN APK BUILD SUCCESSFUL "
+          echo "======================================"
