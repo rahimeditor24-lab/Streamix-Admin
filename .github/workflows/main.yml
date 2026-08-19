@@ -6,152 +6,171 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build Streamix Admin APK
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 2. Setup JDK 17
       - name: Setup JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Find Streamix Admin ZIP
-        id: zip
+      # 3. Find and extract Android project
+      - name: Prepare Android Project
         shell: bash
         run: |
-          ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" | head -n 1)
+          set -e
 
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: ZIP file not found"
+          echo "=== Repository files ==="
+          find . -maxdepth 3 -type f | head -200
+
+          # Find first ZIP
+          ZIP_FILE=$(find . -type f -name "*.zip" | head -n 1 || true)
+
+          if [ -n "$ZIP_FILE" ]; then
+            echo "ZIP found: $ZIP_FILE"
+
+            rm -rf project
+            mkdir -p project
+
+            unzip -q "$ZIP_FILE" -d project
+
+            echo "=== Extracted files ==="
+            find project -maxdepth 4 -type f | head -200
+          fi
+
+          # Find directory containing gradlew
+          GRADLEW=$(find . -type f -name "gradlew" | head -n 1 || true)
+
+          if [ -z "$GRADLEW" ]; then
+            echo "ERROR: gradlew not found."
+            echo "The ZIP/repository does not contain a Gradle wrapper."
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP"
-          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          PROJECT_DIR=$(dirname "$GRADLEW")
+          PROJECT_DIR=$(cd "$PROJECT_DIR" && pwd)
 
-      - name: Unzip Streamix Admin
-        shell: bash
-        run: |
-          rm -rf project
-          mkdir -p project
-          unzip -o "${{ steps.zip.outputs.zip }}" -d project
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Find Android Gradle Project
-        id: project
-        shell: bash
-        run: |
-          DIR=$(find project -type f \
-            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-            -print -quit | xargs -r dirname)
+          echo "Android project:"
+          echo "$PROJECT_DIR"
 
-          if [ -z "$DIR" ]; then
-            echo "ERROR: Android Gradle project not found"
-            exit 1
-          fi
+          cd "$PROJECT_DIR"
 
-          echo "Android project: $DIR"
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          chmod +x gradlew
 
-      - name: Repair Kotlin Compose Compatibility
-        shell: bash
-        run: |
-          PROJECT_DIR="${{ steps.project.outputs.dir }}"
+          echo "=== Gradle files ==="
+          ls -la
 
-          echo "Checking Gradle files..."
-
-          find "$PROJECT_DIR" -type f \
-            \( -name "*.gradle" -o -name "*.gradle.kts" \) \
-            -print
-
-          # Align Kotlin Compose plugin with Kotlin 2.2.10
-          find "$PROJECT_DIR" -type f \
-            \( -name "*.gradle" -o -name "*.gradle.kts" \) \
-            -exec sed -i \
-            -E "s/(org\.jetbrains\.kotlin\.plugin\.compose['\"]?[[:space:]]*,?[[:space:]]*version[[:space:]]*=?[[:space:]]*['\"])[0-9.]+/\12.2.10/g" {} \;
-
-          # Remove old explicit Compose compiler extension configuration.
-          # Modern Kotlin Compose plugin manages the compiler.
-          find "$PROJECT_DIR" -type f \
-            \( -name "*.gradle" -o -name "*.gradle.kts" \) \
-            -exec sed -i \
-            -E '/kotlinCompilerExtensionVersion[[:space:]]*=/d' {} \;
-
-          echo "Compose/Kotlin compatibility repair completed."
-
+      # 4. Setup Gradle
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # 5. Create debug keystore
       - name: Create Debug Keystore
         shell: bash
         run: |
-          PROJECT_DIR="${{ steps.project.outputs.dir }}"
+          set -e
 
-          if [ ! -f "$PROJECT_DIR/debug.keystore" ]; then
-            keytool -genkeypair \
+          cd "$PROJECT_DIR"
+
+          KEYSTORE="$PROJECT_DIR/debug.keystore"
+
+          if [ ! -f "$KEYSTORE" ]; then
+            echo "Creating debug.keystore..."
+
+            keytool \
+              -genkeypair \
               -v \
-              -keystore "$PROJECT_DIR/debug.keystore" \
+              -keystore "$KEYSTORE" \
               -storepass android \
-              -keypass android \
               -alias androiddebugkey \
+              -keypass android \
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
-
-            echo "Debug keystore created."
           else
-            echo "Debug keystore already exists."
+            echo "debug.keystore already exists."
           fi
 
+          ls -lh "$KEYSTORE"
+
+      # 6. Make Gradle executable
       - name: Make Gradle Executable
-        shell: bash
         run: |
-          PROJECT_DIR="${{ steps.project.outputs.dir }}"
+          cd "$PROJECT_DIR"
+          chmod +x gradlew
 
-          if [ -f "$PROJECT_DIR/gradlew" ]; then
-            chmod +x "$PROJECT_DIR/gradlew"
-          fi
+      # 7. Show versions
+      - name: Check Gradle Environment
+        run: |
+          cd "$PROJECT_DIR"
+          ./gradlew --version
 
+      # 8. Clean
+      - name: Clean Build
+        run: |
+          cd "$PROJECT_DIR"
+          ./gradlew clean --no-daemon
+
+      # 9. Build Debug APK
       - name: Build Debug APK
-        shell: bash
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8"
         run: |
-          PROJECT_DIR="${{ steps.project.outputs.dir }}"
           cd "$PROJECT_DIR"
 
-          echo "Building Streamix Admin APK..."
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --info
 
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --no-daemon --stacktrace
-          else
-            gradle assembleDebug --no-daemon --stacktrace
-          fi
-
+      # 10. Find APK
       - name: Find APK
-        id: apk
+        if: success()
         shell: bash
         run: |
-          APK=$(find "${{ steps.project.outputs.dir }}" \
+          echo "=== APK FILES ==="
+
+          find "$PROJECT_DIR" \
             -type f \
             -name "*.apk" \
-            | head -n 1)
+            -print
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK not found"
-            exit 1
-          fi
-
-          echo "APK found: $APK"
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
-
+      # 11. Upload APK
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Streamix-Admin-Debug-APK
-          path: ${{ steps.apk.outputs.path }}
+          name: Streamix-Admin-APK
+          path: |
+            **/build/outputs/apk/**/*.apk
           if-no-files-found: error
+
+      # 12. Build Summary
+      - name: Build Summary
+        if: success()
+        shell: bash
+        run: |
+          echo "======================================"
+          echo "       STREAMIX ADMIN APK READY"
+          echo "======================================"
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" \
+            -exec ls -lh {} \;
