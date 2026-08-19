@@ -12,29 +12,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # 1. Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 2. Java 17
       - name: Setup JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # 3. Find ZIP
       - name: Find Android ZIP
         id: zip
         shell: bash
         run: |
-          ZIP=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+          ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP" ]; then
             echo "ERROR: Android ZIP not found"
+            find . -maxdepth 3 -type f
             exit 1
           fi
 
           echo "Found ZIP: $ZIP"
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
+      # 4. Extract ZIP
       - name: Extract Android ZIP
         shell: bash
         run: |
@@ -43,9 +49,10 @@ jobs:
 
           unzip -q "${{ steps.zip.outputs.zip }}" -d android-project
 
-          echo "=== Extracted files ==="
-          find android-project -maxdepth 3 -type f | sort
+          echo "=== Android Project Files ==="
+          find android-project -maxdepth 4 -type f | sort
 
+      # 5. Find Gradle project
       - name: Find Gradle Project
         id: project
         shell: bash
@@ -55,59 +62,93 @@ jobs:
             -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: settings.gradle(.kts) not found"
-            find android-project -maxdepth 4 -type f
+            echo "ERROR: Gradle project not found"
+            find android-project -maxdepth 5 -type f
             exit 1
           fi
 
-          echo "Gradle project found: $PROJECT"
+          echo "Gradle project found:"
+          echo "$PROJECT"
+
           echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Gradle 8.7
+      # 6. Setup Gradle 9.3.1
+      - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '9.3.1'
 
-      - name: Check Gradle Environment
+      # 7. Check environment
+      - name: Check Build Environment
         working-directory: ${{ steps.project.outputs.dir }}
+        shell: bash
         run: |
-          gradle --version
+          echo "=== Java ==="
           java -version
 
+          echo "=== Gradle ==="
+          gradle --version
+
+          echo "=== Project ==="
+          pwd
+
+          echo "=== Files ==="
+          ls -la
+
+      # 8. Clean
       - name: Clean Build
         working-directory: ${{ steps.project.outputs.dir }}
+        shell: bash
         run: |
-          gradle clean --no-daemon
+          gradle clean --no-daemon --stacktrace
 
+      # 9. Build Debug APK
       - name: Build Debug APK
         working-directory: ${{ steps.project.outputs.dir }}
+        shell: bash
         run: |
-          gradle :app:assembleDebug --no-daemon --stacktrace
+          gradle :app:assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --info
 
+      # 10. Find APK
       - name: Find APK
         id: apk
         shell: bash
         run: |
           APK=$(find "${{ steps.project.outputs.dir }}/app/build/outputs/apk" \
-            -type f -name "*.apk" | head -n 1)
+            -type f \
+            -name "*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK not found"
-            find "${{ steps.project.outputs.dir }}/app/build" -type f || true
+
+            echo "=== Build directory ==="
+            find "${{ steps.project.outputs.dir }}/app/build" \
+              -type f 2>/dev/null || true
+
             exit 1
           fi
 
-          echo "APK found: $APK"
+          echo "APK found:"
+          echo "$APK"
+
           echo "path=$APK" >> "$GITHUB_OUTPUT"
 
+      # 11. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Streamix-Admin-Debug
+          name: Streamix-Admin-Debug-APK
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
 
+      # 12. Summary
       - name: Build Summary
         run: |
-          echo "## Streamix Admin APK Build" >> "$GITHUB_STEP_SUMMARY"
-          echo "APK build completed." >> "$GITHUB_STEP_SUMMARY"
+          echo "## ✅ Streamix Admin APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Build Successful 🎉" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "APK has been generated successfully." >> "$GITHUB_STEP_SUMMARY"
